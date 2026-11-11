@@ -1,0 +1,238 @@
+name: Build honk IPK (aarch64_cortex-a53)
+
+on:
+  workflow_dispatch:
+    inputs:
+      honk_tag:
+        description: 'honk 版本（留空=自动取最新 release）'
+        required: false
+        default: ''
+        type: string
+  schedule:
+    # 每周一 03:00 UTC 检查是否有新版 honk
+    - cron: '0 3 * * 1'
+
+concurrency:
+  group: honk-ipk
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  TZ: Asia/Shanghai
+  SDK_VERSION: '25.12-SNAPSHOT'
+  TARGET: 'mediatek-filogic'
+  ARCH: 'aarch64_cortex-a53'
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 查询 honk 最新版本
+        id: ver
+        run: |
+          INPUT="${{ github.event.inputs.honk_tag }}"
+          if [ -n "$INPUT" ]; then
+            TAG="$INPUT"
+            echo "使用手动指定: $TAG"
+          else
+            TAG=$(curl -fsSL --max-time 30 \
+              https://api.github.com/repos/daeuniverse/honk/releases/latest 2>/dev/null \
+              | grep -oE '"tag_name":[[:space:]]*"[^"]+"' | head -1 | sed 's/.*"\(v[^"]*\)".*/\1/')
+            [ -z "$TAG" ] && { echo "::error::无法获取 honk 最新版本"; exit 1; }
+            echo "GitHub 最新: $TAG"
+          fi
+          # v0.1.0-beta.6 -> 0.1.0_beta6
+          VER=$(echo "$TAG" | sed -E 's/^v//' | sed -E 's/-beta\.([0-9]+)$/_beta\1/')
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "ver=$VER" >> $GITHUB_OUTPUT
+          echo "包版本: $VER"
+
+      - name: 检查是否已有该版本的 Release
+        id: check
+        run: |
+          TAG="honk-${{ steps.ver.outputs.ver }}"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "已存在 $TAG，跳过编译"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "需要编译 $TAG"
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 安装依赖
+        if: steps.check.outputs.exists == 'false'
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set +e
+          sudo -E apt-get update
+          sudo -E apt-get install -y build-essential gcc-multilib g++-multilib git \
+            libncurses5-dev libncursesw5-dev zlib1g-dev gawk flex bison unzip wget \
+            curl rsync python3 python3-setuptools python3-pyelftools libssl-dev \
+            libelf-dev patch pkg-config file subversion
+          sudo -E apt-get clean
+          exit 0
+
+      - name: 下载 ImmortalWrt SDK
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          set -e
+          echo "查找 SDK ..."
+          # 从 snapshot 目录找对应架构的 SDK
+          BASE="https://downloads.immortalwrt.org/snapshots/targets/mediatek/filogic"
+          SDK_URL=$(curl -fsSL --max-time 60 "$BASE/" 2>/dev/null \
+            | grep -oE 'immortalwrt-sdk-[^"<]*aarch64[^"<]*\.tar\.zst' | head -1)
+
+          if [ -z "$SDK_URL" ]; then
+            echo "::warning::未找到 SDK，改用 openwrt 官方 SDK"
+            BASE="https://downloads.openwrt.org/snapshots/targets/mediatek/filogic"
+            SDK_URL=$(curl -fsSL --max-time 60 "$BASE/" 2>/dev/null \
+              | grep -oE 'openwrt-sdk-[^"<]*aarch64[^"<]*\.tar\.zst' | head -1)
+          fi
+
+          [ -n "$SDK_URL" ] || { echo "::error::找不到 SDK 下载地址"; exit 1; }
+          echo "SDK: $SDK_URL"
+
+          wget -q "$BASE/$SDK_URL" -O sdk.tar.zst
+          ls -lh sdk.tar.zst
+          tar --use-compress-program=unzstd -xf sdk.tar.zst
+          SDK_DIR=$(ls -d *sdk* | head -1)
+          echo "SDK_DIR=$SDK_DIR" >> $GITHUB_ENV
+          cd "$SDK_DIR" && ls | head -10
+
+      - name: 安装 Rust
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          set +e
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          . "$HOME/.cargo/env"
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup target add --toolchain 1.99.1 aarch64-unknown-linux-musl
+          rustup toolchain install nightly-2026-10-20 --profile minimal --component rust-src
+          rustup target add --toolchain nightly-2026-10-20 aarch64-unknown-linux-musl
+          rustup default 1.99.1
+
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL --retry 3 --max-time 180 \
+            "https://github.com/aya-rs/bpf-linker/releases/download/v0.13.0/bpf-linker-x86_64-unknown-linux-musl.tar.zst" \
+            -o /tmp/bl.tar.zst 2>/dev/null && \
+            tar --use-compress-program=unzstd -xf /tmp/bl.tar.zst -C "$HOME/.local/bin" 2>/dev/null
+          chmod +x "$HOME/.local/bin/bpf-linker" 2>/dev/null
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+          rustup toolchain list
+          bpf-linker --version 2>&1 | head -1
+          exit 0
+
+      - name: 准备 honk 包
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          set -e
+          cd "$SDK_DIR"
+          # 加 daepkgs feed
+          grep -q daepkgs feeds.conf.default || \
+            echo 'src-git daepkgs https://github.com/daeuniverse/openwrt-packages.git;main' >> feeds.conf.default
+          ./scripts/feeds update daepkgs
+          ./scripts/feeds install honk
+
+          HONK_PKG=$(find . -maxdepth 4 -type d -name honk -path '*dae*' | head -1)
+          [ -n "$HONK_PKG" ] || { echo "::error::找不到 honk 包目录"; exit 1; }
+          echo "honk 包: $HONK_PKG"
+
+          # 同步版本号
+          TAG="${{ steps.ver.outputs.tag }}"
+          VER="${{ steps.ver.outputs.ver }}"
+          echo "版本: $TAG -> $VER"
+          sed -i "s|HONK_VERSION),.*)|HONK_VERSION),${VER})|" "$HONK_PKG/Makefile" || true
+          sed -i "s|HONK_GIT_TAG),v[^)]*)|HONK_GIT_TAG),${TAG})|" "$HONK_PKG/Makefile" || true
+          grep -E 'HONK_VERSION|HONK_GIT_TAG' "$HONK_PKG/Makefile" | head -3
+
+          # clone 源码
+          rm -rf "$HONK_PKG/src"
+          git clone --depth 1 --branch "$TAG" https://github.com/daeuniverse/honk "$HONK_PKG/src"
+          [ -f "$HONK_PKG/src/Cargo.toml" ] || { echo "::error::源码缺 Cargo.toml"; exit 1; }
+          du -sh "$HONK_PKG/src"
+
+          # 生成配置
+          echo "CONFIG_PACKAGE_honk=y" > .config
+          echo "CONFIG_PACKAGE_vmlinux-btf-builtin=y" >> .config
+          echo "CONFIG_BUILDBOT=y" >> .config
+          echo "CONFIG_KERNEL_DEBUG_INFO=y" >> .config
+          echo "# CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set" >> .config
+          echo "CONFIG_KERNEL_DEBUG_INFO_BTF=y" >> .config
+          make defconfig
+
+      - name: 编译 honk ipk
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          set -e
+          cd "$SDK_DIR"
+          echo "开始编译 honk ..."
+          make package/honk/compile -j$(nproc) V=s 2>&1 | tail -100 || \
+            make package/honk/compile -j1 V=s 2>&1 | tail -150
+
+      - name: 收集 ipk
+        id: collect
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          set -e
+          cd "$SDK_DIR"
+          find bin -name 'honk*.ipk' -o -name 'honk*.apk' | head -20
+          IPK=$(find bin -name 'honk_*.ipk' | head -1)
+          if [ -z "$IPK" ]; then
+            echo "::error::没有生成 ipk"
+            find bin -name '*.ipk' | head -20
+            exit 1
+          fi
+          echo "找到: $IPK"
+          mkdir -p /tmp/out
+          cp "$IPK" /tmp/out/
+          ls -lh /tmp/out/
+          echo "ok=true" >> $GITHUB_OUTPUT
+
+      - name: 发布 Release
+        if: steps.collect.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="honk-${{ steps.ver.outputs.ver }}"
+          gh release create "$TAG" /tmp/out/*.ipk \
+            --repo "${{ github.repository }}" \
+            --title "honk ${{ steps.ver.outputs.tag }}" \
+            --notes "honk ${{ steps.ver.outputs.tag }} for aarch64_cortex-a53 (CMCC RAX3000M)
+
+          安装：
+          \`\`\`
+          opkg install --force-reinstall /tmp/honk_*.ipk
+          /etc/init.d/honk restart
+          \`\`\`" \
+            || gh release upload "$TAG" /tmp/out/*.ipk --clobber
+          echo "发布完成: $TAG"
+
+      - name: 清理旧 Release（保留 3 个）
+        if: steps.collect.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ALL=$(gh release list --repo "${{ github.repository }}" --limit 50 --json tagName,createdAt \
+            --jq 'sort_by(.createdAt) | reverse | .[].tagName' 2>/dev/null | grep '^honk-' || true)
+          [ -z "$ALL" ] && exit 0
+          TOTAL=$(echo "$ALL" | wc -l)
+          echo "共 $TOTAL 个，保留 3 个"
+          [ "$TOTAL" -le 3 ] && exit 0
+          echo "$ALL" | tail -n +4 | while read -r t; do
+            [ -n "$t" ] || continue
+            echo "  删除 $t"
+            gh release delete "$t" --repo "${{ github.repository }}" --yes 2>/dev/null || true
+            gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$t" 2>/dev/null || true
+          done
