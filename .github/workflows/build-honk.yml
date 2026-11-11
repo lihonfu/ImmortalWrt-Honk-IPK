@@ -42,10 +42,31 @@ jobs:
             TAG="$INPUT"
             echo "使用手动指定: $TAG"
           else
+            # 注意：honk 的 release 全部标记为 prerelease，
+            # /releases/latest 会返回空，必须用 /releases 列表
             TAG=$(curl -fsSL --max-time 30 \
-              https://api.github.com/repos/daeuniverse/honk/releases/latest 2>/dev/null \
-              | grep -oE '"tag_name":[[:space:]]*"[^"]+"' | head -1 | sed 's/.*"\(v[^"]*\)".*/\1/')
-            [ -z "$TAG" ] && { echo "::error::无法获取 honk 最新版本"; exit 1; }
+              "https://api.github.com/repos/daeuniverse/honk/releases?per_page=20" 2>/dev/null \
+              | python3 -c "
+import json,sys,re
+try:
+    rs=json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for r in rs:
+    if r.get('draft'): continue
+    t=r.get('tag_name','')
+    # 只接受正式版本号 vX.Y.Z 或 vX.Y.Z-beta.N
+    if re.match(r'^v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$', t):
+        print(t); break
+")
+            if [ -z "$TAG" ]; then
+              echo "::warning::API 查询失败，回退到 git tag"
+              TAG=$(git ls-remote --tags --refs https://github.com/daeuniverse/honk.git 2>/dev/null \
+                | sed 's|.*refs/tags/||' \
+                | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$' \
+                | sort -V | tail -1)
+            fi
+            [ -z "$TAG" ] && { echo "::error::无法获取 honk 版本"; exit 1; }
             echo "GitHub 最新: $TAG"
           fi
           # v0.1.0-beta.6 -> 0.1.0_beta6
