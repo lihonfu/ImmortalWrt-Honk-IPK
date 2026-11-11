@@ -96,13 +96,18 @@ jobs:
           BASE="https://downloads.immortalwrt.org/snapshots/targets/mediatek/filogic"
           echo "查询 $BASE ..."
           curl -fsSL --max-time 60 "$BASE/" -o /tmp/idx.html 2>/dev/null || echo "索引获取失败"
-          SDK_URL=$(grep -oE 'immortalwrt-sdk-[^"<]*aarch64[^"<]*\.tar\.zst' /tmp/idx.html 2>/dev/null | head -1)
+
+          # SDK 文件名形如 immortalwrt-sdk-mediatek-filogic_gcc-14.4.0_musl.Linux-x86_64.tar.zst
+          # 注意：SDK 是 x86_64 主机的交叉工具链，文件名里没有 aarch64
+          SDK_URL=$(grep -oE '"immortalwrt-sdk-[^"]*\.tar\.zst"' /tmp/idx.html 2>/dev/null \
+            | tr -d '"' | head -1)
 
           if [ -z "$SDK_URL" ]; then
             echo "::warning::ImmortalWrt SDK 未找到，改用 openwrt"
             BASE="https://downloads.openwrt.org/snapshots/targets/mediatek/filogic"
             curl -fsSL --max-time 60 "$BASE/" -o /tmp/idx.html 2>/dev/null
-            SDK_URL=$(grep -oE 'openwrt-sdk-[^"<]*aarch64[^"<]*\.tar\.zst' /tmp/idx.html 2>/dev/null | head -1)
+            SDK_URL=$(grep -oE '"openwrt-sdk-[^"]*\.tar\.zst"' /tmp/idx.html 2>/dev/null \
+              | tr -d '"' | head -1)
           fi
 
           if [ -z "$SDK_URL" ]; then
