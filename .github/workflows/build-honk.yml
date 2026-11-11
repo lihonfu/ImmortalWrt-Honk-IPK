@@ -42,8 +42,10 @@ jobs:
           else
             # honk 的 release 全部标记为 prerelease，/releases/latest 返回空
             # 所以用 /releases 列表取第一个正式版本号
-            TAG=$(gh api "repos/daeuniverse/honk/releases?per_page=30" \
-                    --jq '[.[] | select(.draft == false) | .tag_name] | map(select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+(-beta\\.[0-9]+)?$"))) | .[0]' 2>/dev/null || echo "")
+            TAG=$(gh api "repos/daeuniverse/honk/releases?per_page=30" 2>/dev/null \
+              | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+[.][0-9]+[.][0-9]+(-beta[.][0-9]+)?"' \
+              | head -1 \
+              | sed 's/.*"\(v[^"]*\)".*/\1/')
             if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
               echo "::warning::API 查询失败，回退到 git tag"
               TAG=$(git ls-remote --tags --refs https://github.com/daeuniverse/honk.git 2>/dev/null \
