@@ -178,14 +178,15 @@ jobs:
           [ -f "$HONK_PKG/src/Cargo.toml" ] || { echo "::error::源码缺 Cargo.toml"; exit 1; }
           du -sh "$HONK_PKG/src"
 
-          cat > .config <<'CFGEOF'
-CONFIG_PACKAGE_honk=y
-CONFIG_PACKAGE_vmlinux-btf-builtin=y
-CONFIG_BUILDBOT=y
-CONFIG_KERNEL_DEBUG_INFO=y
-# CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set
-CONFIG_KERNEL_DEBUG_INFO_BTF=y
-CFGEOF
+          {
+            echo "CONFIG_PACKAGE_honk=y"
+            echo "CONFIG_PACKAGE_vmlinux-btf-builtin=y"
+            echo "CONFIG_BUILDBOT=y"
+            echo "CONFIG_KERNEL_DEBUG_INFO=y"
+            echo "# CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set"
+            echo "CONFIG_KERNEL_DEBUG_INFO_BTF=y"
+          } > .config
+          cat .config
           make defconfig
 
       - name: 编译
@@ -220,15 +221,15 @@ CFGEOF
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="honk-${{ steps.ver.outputs.ver }}"
-          cat > /tmp/notes.md <<'NOTEEOF'
-          honk for aarch64_cortex-a53 (CMCC RAX3000M)
-
-          安装：
-          ```
-          opkg install --force-reinstall /tmp/honk_*.ipk
-          /etc/init.d/honk restart
-          ```
-          NOTEEOF
+          {
+            echo "honk for aarch64_cortex-a53 (CMCC RAX3000M)"
+            echo ""
+            echo "安装:"
+            echo '```'
+            echo "opkg install --force-reinstall /tmp/honk_*.ipk"
+            echo "/etc/init.d/honk restart"
+            echo '```'
+          } > /tmp/notes.md
           gh release create "$TAG" /tmp/out/*.ipk \
             --repo "${{ github.repository }}" \
             --title "honk ${{ steps.ver.outputs.tag }}" \
