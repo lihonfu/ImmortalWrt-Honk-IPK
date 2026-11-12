@@ -208,7 +208,16 @@ jobs:
         run: |
           cd "$SDK_DIR"
           echo "开始编译 honk ($(nproc) 线程)..."
-          make package/honk/compile -j$(nproc) 2>&1 | tail -120
+          # 用 -j1 V=s 拿到完整错误（并行编译的输出会被截断）
+          if ! make package/honk/compile -j$(nproc) 2>&1 | tee /tmp/build.log | tail -40; then
+            echo "===== 编译失败，以下是关键错误 ====="
+            grep -iE "error|failed|panicked|no such|cannot find" /tmp/build.log 2>/dev/null | tail -40
+            echo "===== 最后 80 行 ====="
+            tail -80 /tmp/build.log 2>/dev/null
+            exit 1
+          fi
+          echo "编译成功"
+          ls -la bin/packages/*/*/honk* 2>/dev/null || true
 
       - name: 收集 ipk
         id: collect
