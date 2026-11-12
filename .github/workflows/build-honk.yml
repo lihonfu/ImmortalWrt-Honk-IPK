@@ -174,42 +174,7 @@ jobs:
           TAG="${{ steps.ver.outputs.tag }}"
           VER="${{ steps.ver.outputs.ver }}"
           echo "目标版本: $TAG ($VER)"
-
-          # Makefile 默认值形如:
-          #   PKG_VERSION:=$(if $(HONK_VERSION),$(HONK_VERSION),0.1.0_beta6)
-          #   HONK_GIT_TAG:=$(if $(HONK_GIT_TAG),$(HONK_GIT_TAG),v0.1.0-beta.6)
-          # 只有当默认值与目标不同才改，且必须保留 if(...) 结构，否则会变空
-          MF_VER=$(grep -oE 'PKG_VERSION:=.*,' "$HONK_PKG/Makefile" | sed 's/.*,//' | head -1)
-          MF_TAG=$(grep -oE 'HONK_GIT_TAG:=.*,' "$HONK_PKG/Makefile" | sed 's/.*,//' | head -1)
-          echo "Makefile 默认: PKG_VERSION=$MF_VER HONK_GIT_TAG=$MF_TAG"
-
-          if [ "$MF_VER" != "$VER" ] || [ "$MF_TAG" != "$TAG" ]; then
-            echo "需要修改 Makefile"
-            python3 - "$HONK_PKG/Makefile" "$VER" "$TAG" <<'PYEOF'
-          import re, sys
-          path, ver, tag = sys.argv[1], sys.argv[2], sys.argv[3]
-          s = open(path).read()
-          # 只替换 if(...) 里的最后一个参数
-          s = re.sub(r'(PKG_VERSION:=\$\\(if \$\\(HONK_VERSION\),\$\\(HONK_VERSION\),)[^)]*(\))',
-                     lambda m: m.group(1) + ver + m.group(2), s)
-          s = re.sub(r'(HONK_GIT_TAG:=\$\\(if \$\\(HONK_GIT_TAG\),\$\\(HONK_GIT_TAG\),)[^)]*(\))',
-                     lambda m: m.group(1) + tag + m.group(2), s)
-          open(path, 'w').write(s)
-          print("已修改")
-          PYEOF
-          fi
-
-          echo "最终:"
-          grep -E 'PKG_VERSION:=|HONK_GIT_TAG:=' "$HONK_PKG/Makefile"
-
-          # 去掉 vmlinux-btf 依赖：
-          # vmlinux-btf 要求外面传 VMLINUX_BTF_SRC（BTF blob），SDK 里没有，
-          # 直接 make 会报 "vmlinux-btf failed to build"。
-          # 我们的路由器内核自带 BTF（/sys/kernel/btf/vmlinux 存在），
-          # 装的是 vmlinux-btf-builtin，所以不需要这个包。
-          echo "去掉 vmlinux-btf 依赖"
-          sed -i 's/ +vmlinux-btf / /' "$HONK_PKG/Makefile"
-          grep -E 'DEPENDS' "$HONK_PKG/Makefile" | head -3
+          sh scripts/set-honk-version.sh "$HONK_PKG/Makefile" "$VER" "$TAG"
 
           rm -rf "$HONK_PKG/src"
           git clone --depth 1 --branch "$TAG" https://github.com/daeuniverse/honk "$HONK_PKG/src"
