@@ -174,7 +174,7 @@ jobs:
           TAG="${{ steps.ver.outputs.tag }}"
           VER="${{ steps.ver.outputs.ver }}"
           echo "目标版本: $TAG ($VER)"
-          sh scripts/set-honk-version.sh "$HONK_PKG/Makefile" "$VER" "$TAG"
+          sh "$GITHUB_WORKSPACE/scripts/set-honk-version.sh" "$HONK_PKG/Makefile" "$VER" "$TAG"
 
           rm -rf "$HONK_PKG/src"
           git clone --depth 1 --branch "$TAG" https://github.com/daeuniverse/honk "$HONK_PKG/src"
