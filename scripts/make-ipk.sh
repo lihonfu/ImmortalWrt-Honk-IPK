@@ -77,14 +77,14 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/control" "$WORK/data"
 
-# control.tar.gz
+# control.tar.gz —— 成员名必须是 control / conffiles，不带 ./ 前缀
 cp "$CTRL" "$WORK/control/control"
 cp "$CONF" "$WORK/control/conffiles"
-( cd "$WORK/control" && tar czf "$OUT/control.tar.gz" ./* 2>/dev/null )
+( cd "$WORK/control" && tar czf "$OUT/control.tar.gz" control conffiles 2>/dev/null )
 
-# data.tar.gz
+# data.tar.gz —— 用 . 但去掉 ./ 前缀（OpenWrt ipk 要求）
 cp -a "$PKGDIR/." "$WORK/data/"
-( cd "$WORK/data" && tar czf "$OUT/data.tar.gz" ./* 2>/dev/null )
+( cd "$WORK/data" && tar czf "$OUT/data.tar.gz" --exclude='./var/lock' . 2>/dev/null )
 
 # 7. 打 ar 包
 printf '2.0\n' > "$OUT/debian-binary"
