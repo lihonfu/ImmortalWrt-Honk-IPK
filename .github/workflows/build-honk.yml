@@ -178,6 +178,15 @@ jobs:
           sed -i "s|HONK_GIT_TAG),v[^)]*)|HONK_GIT_TAG),${TAG})|" "$HONK_PKG/Makefile" || true
           grep -E 'HONK_VERSION|HONK_GIT_TAG' "$HONK_PKG/Makefile" | head -3
 
+          # 去掉 vmlinux-btf 依赖：
+          # vmlinux-btf 要求外面传 VMLINUX_BTF_SRC（BTF blob），SDK 里没有，
+          # 直接 make 会报 "vmlinux-btf failed to build"。
+          # 我们的路由器内核自带 BTF（/sys/kernel/btf/vmlinux 存在），
+          # 装的是 vmlinux-btf-builtin，所以不需要这个包。
+          echo "去掉 vmlinux-btf 依赖"
+          sed -i 's/ +vmlinux-btf / /' "$HONK_PKG/Makefile"
+          grep -E 'DEPENDS' "$HONK_PKG/Makefile" | head -3
+
           rm -rf "$HONK_PKG/src"
           git clone --depth 1 --branch "$TAG" https://github.com/daeuniverse/honk "$HONK_PKG/src"
           [ -f "$HONK_PKG/src/Cargo.toml" ] || { echo "::error::源码缺 Cargo.toml"; exit 1; }
