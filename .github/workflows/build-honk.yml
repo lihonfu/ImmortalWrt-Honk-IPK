@@ -207,17 +207,20 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         run: |
           cd "$SDK_DIR"
-          echo "开始编译 honk ($(nproc) 线程)..."
-          # 用 -j1 V=s 拿到完整错误（并行编译的输出会被截断）
-          if ! make package/honk/compile -j$(nproc) 2>&1 | tee /tmp/build.log | tail -40; then
-            echo "===== 编译失败，以下是关键错误 ====="
-            grep -iE "error|failed|panicked|no such|cannot find" /tmp/build.log 2>/dev/null | tail -40
-            echo "===== 最后 80 行 ====="
-            tail -80 /tmp/build.log 2>/dev/null
-            exit 1
-          fi
+          echo "开始编译 honk ..."
+          set +e
+          make package/honk/compile -j1 V=s > /tmp/build.log 2>&1
+          RC=$?
+          set -e
+          echo "make 退出码: $RC"
+          echo "===== 日志行数: $(wc -l < /tmp/build.log) ====="
+          echo "===== 关键错误 ====="
+          grep -iE "error:|failed|panicked|cannot find|not set|No such" /tmp/build.log | tail -40
+          echo "===== 最后 100 行 ====="
+          tail -100 /tmp/build.log
+          if [ "$RC" -ne 0 ]; then exit 1; fi
           echo "编译成功"
-          ls -la bin/packages/*/*/honk* 2>/dev/null || true
+          find bin -name 'honk*.ipk' | head -5
 
       - name: 收集 ipk
         id: collect
