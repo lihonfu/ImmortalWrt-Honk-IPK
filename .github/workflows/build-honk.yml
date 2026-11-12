@@ -226,19 +226,24 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         run: |
           cd "$SDK_DIR"
-          echo "搜索 ipk:"
-          find bin -name '*.ipk' 2>/dev/null | head -20
-          IPK=$(find bin -name 'honk*.ipk' 2>/dev/null | head -1)
-          if [ -z "$IPK" ]; then
-            echo "::error::未生成 honk ipk"
-            find bin -name '*.ipk' 2>/dev/null | head -20
+          echo "=== 编译产物 ==="
+          find bin -name '*.apk' -o -name '*.ipk' 2>/dev/null | head -10
+          echo
+          echo "=== 安装树 ==="
+          find build_dir -maxdepth 4 -type d -path '*honk*/.pkgdir/honk' 2>/dev/null | head -3
+
+          # SDK 生成的是 .apk，但路由器是 opkg，需要用安装树重新打成 .ipk
+          echo
+          echo "=== 打 ipk 包 ==="
+          sh "$GITHUB_WORKSPACE/scripts/make-ipk.sh" "$PWD" /tmp/out
+
+          ls -lh /tmp/out/
+          if ls /tmp/out/*.ipk >/dev/null 2>&1; then
+            echo "ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "::error::未生成 ipk"
             exit 1
           fi
-          echo "找到: $IPK"
-          mkdir -p /tmp/out
-          cp "$IPK" /tmp/out/
-          ls -lh /tmp/out/
-          echo "ok=true" >> $GITHUB_OUTPUT
 
       - name: 发布 Release
         if: steps.collect.outputs.ok == 'true'
